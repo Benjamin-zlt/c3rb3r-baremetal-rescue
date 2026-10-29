@@ -1,0 +1,12 @@
+# never commit keys, dumps, samples or victim files
+*.bin
+mem.idx
+maps
+*.L0CK3D
+*.c3part
+*.whl
+tools/lib/
+ir/
+__pycache__/
+*.lst
+*.tsv

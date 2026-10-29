@@ -1,0 +1,8 @@
+{
+  "name": "libgld-802ac85d-linux-x86_64",
+  "packed_sha256": "802ac85d19dc6db2b1849bb3499877280544d04a0ae94d4c408b6c321669903d",
+  "unpacked_sha256": "78d06b74827429f8b9947ac5940b15fb6e6f724386dcb04dc6f7eb6dcd41d3a4",
+  "mode_va": 5504140,
+  "master_pointer_va": 5515256,
+  "notes": "Addresses from https://github.com/soimy/c3rb3r-rescue; independently confirmed on a second victim (bare-metal DSM, process dump). Valid only for this exact non-PIE build."
+}
