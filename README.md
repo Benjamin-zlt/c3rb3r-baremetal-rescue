@@ -1,4 +1,4 @@
-# C3RB3R (.L0CK3D) 群晖 / 黑群晖 实机解密案例
+# C3RB3R (.L0CK3D) 群晖 / 黑群晖 实机解密案例 · Bare-metal Synology Recovery Case
 
 **C3RB3R ransomware (.L0CK3D, `read-me3.txt`) on bare-metal Synology DSM: full recovery without paying, by freezing the encryptor and reading its session key from process memory.**
 
