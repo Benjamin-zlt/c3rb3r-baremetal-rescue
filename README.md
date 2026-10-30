@@ -77,6 +77,7 @@ setsid nohup python3 tools/bulk_decrypt_local.py --root /volume1/SHARE \
 - `profiles/libgld-802ac85d.json`：样本地址
 - `tests/`：不依赖样本和真实密钥的自测（ChaCha 核心对照标准 ChaCha20、三种模式往返、错误密钥拒绝）
 - `docs/case-report.md`：本案经过、入口和 IOC
+- `docs/sample-dossier.md`：样本档案（中英文）——哈希、加密结构、文件尾布局、分段参数，以及如何按哈希在 MalwareBazaar 获取样本
 
 本仓库**不包含**恶意样本、受害者数据或任何真实密钥。
 
