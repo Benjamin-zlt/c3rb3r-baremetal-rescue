@@ -2,13 +2,106 @@
 
 **C3RB3R ransomware (.L0CK3D, `read-me3.txt`) on bare-metal Synology DSM: full recovery without paying, by freezing the encryptor and reading its session key from process memory.**
 
+> English first, 中文在后。 | 中文版见下方 [中文](#中文).
+
+---
+
+## English
+
+This is the **second independent victim's successful case** after [soimy/c3rb3r-rescue](https://github.com/soimy/c3rb3r-rescue). The first case ran inside a PVE virtual machine and recovered the key from a whole-VM RAM image. This case ran on **bare metal (a Xpenology DS918+, DSM 7.2)** with no virtualization layer, relying on **`kill -STOP` to freeze the encryptor while it was still alive, then dumping `/proc/PID/mem`**.
+
+Result: 84,500 encrypted files (~940GB), **all decrypted with a single session key lifted from memory**; spot checks are byte-identical to the originals.
+
+> If you have just found your files turned into `.L0CK3D`, read **What to do right now** below first. **Do not reboot the NAS. Do not kill the encryptor process.**
+
+### What to do right now
+
+1. **Find the encryptor, freeze it, do not kill it.**
+   ```sh
+   ls -l /proc/*/exe 2>/dev/null | grep deleted     # here it was /usr/bin/libgld (deleted)
+   kill -STOP <PID>                                 # freeze. kill -9 / reboot = key lost forever
+   grep State /proc/<PID>/status                    # confirm it is T (stopped)
+   ```
+2. **Dump memory and the sample immediately** (needs root): `python3 tools/dump_process_memory.py <PID> /volume1/<a share with space>/ir`
+3. **Cut off the entry point**: router IPv6 firewall, close telnet/SSH to the internet, kill the reverse shell. Do not reboot until the dump is done.
+4. Check the sha256 of `ir/exe.bin`. If it is `802ac85d…903d`, you can use this repo directly; if not, the addresses must be re-reversed (see soimy's method).
+
+### Recovery steps
+
+```sh
+# 1. Extract the 48-byte session master key (IV16 + AES-256 key32). Standard library only; DSM's built-in python3 is enough.
+python3 tools/extract_master.py ir/ master.bin
+
+# 2. Prepare numpy (DSM has no pip: download the official wheel on another PC, copy it over, unzip in place)
+#    pip download numpy==1.24.4 --python-version 3.8 --platform manylinux2014_x86_64 --only-binary=:all: --no-deps
+python3 -m zipfile -e numpy-1.24.4-*.whl tools/lib/
+
+# 3. Verify the key first with "encrypted file + a good copy from elsewhere"; cover all three modes
+python3 tools/verify_pairs.py master.bin pairs.tsv
+
+# 4. Session marker = 4 bytes starting at the 20th-from-last byte of any .L0CK3D file
+tail -c 20 some.jpg.L0CK3D | head -c 4 | od -An -tx1
+
+# 5. Bulk-decrypt locally on the NAS, no network; the original .L0CK3D is kept, nothing existing is overwritten
+cd /volume1/SHARE && find . -name '*.L0CK3D' | sed 's|^\./||' > /volume1/rescue/files.lst
+setsid nohup python3 tools/bulk_decrypt_local.py --root /volume1/SHARE \
+    --list /volume1/rescue/files.lst --master master.bin --marker <marker> \
+    --state /volume1/rescue > /volume1/rescue/run.out 2>&1 < /dev/null &
+```
+
+### Key findings
+
+| Item | Content |
+|---|---|
+| Sample | `libgld`, ELF x86-64 statically linked, UPX 3.95 packed, packed sha256 `802ac85d19dc6db2b1849bb3499877280544d04a0ae94d4c408b6c321669903d` (**same file** as the first case) |
+| File encryption | ChaCha8, 32B key + 8B nonce + 64-bit counter, a random key per file |
+| Key protection | each per-file key is wrapped (AES-256-CBC) by a **session master key** in the 48 bytes before the footer; the master lives only in process memory, global pointer `0x5427f8` |
+| Footer | 588 bytes; offset 568 session marker, 572 mode (0x24 full / 0x25 partial / 0x26 first 1MiB), 574 crypto mode (0x20 real, 0x21 decoy), 580 original size |
+| Mode distribution here | partial 56%, first 1MiB 31%, full 13% (400 sampled) |
+| Reusable across victims? | **No.** Each run uses a new session key; this case and the first have different markers. Only the one in your own process memory works |
+
+### Why it looked unbreakable at first
+
+The footer also holds a 304-byte public-key-wrapped blob, and the key's RNG is wolfSSL's Hash_DRBG (seeded from `/dev/urandom`), which looks like "no decryption without the attacker's private key." In reality the program keeps the AES master key in memory for the whole run, using it to wrap every file's key. **As long as the process is alive, the master is there.** That is why "freeze, don't kill, don't reboot" is the premise of the entire recovery.
+
+### Differences from the first case
+
+| | soimy/c3rb3r-rescue | This case |
+|---|---|---|
+| Platform | DSM inside a PVE VM | Bare-metal Xpenology |
+| Memory source | QEMU whole-VM RAM (16GB), needs page-table translation | frozen process's `/proc/PID/mem` (2GB writable region), read directly by virtual address |
+| Decryption location | offline, on a separate copy | in place on the NAS (written next to the originals), no data moved |
+| Speed | — | ~110MB/s single process on an i3-10100T, ~2.5h for 940GB |
+
+### Layout
+
+- `tools/c3dec.py`: file format and decryption core (ChaCha8 + AES-CBC unwrap + partial-segment rule)
+- `tools/dump_process_memory.py`: dump the frozen process's sample and writable memory
+- `tools/extract_master.py`: lift the session master key from the memory image per the sample profile
+- `tools/verify_pairs.py`: verify the key against known originals
+- `tools/bulk_decrypt_local.py`: bulk local decryption on the NAS, resumable
+- `profiles/libgld-802ac85d.json`: sample addresses
+- `tests/`: self-tests that need no sample and no real key (ChaCha core vs. reference ChaCha20, round-trip of all three modes, wrong-key rejection)
+- `docs/case-report.md`: the incident, entry point, and IOCs
+- `docs/sample-dossier.md`: sample dossier (bilingual) — hashes, crypto layout, footer layout, partial factors, and how to obtain the sample by hash from MalwareBazaar
+
+This repo contains **no** malware sample, no victim data, and no real key.
+
+### Credits
+
+The format, the addresses, and the key insight that "the session master key is in memory" come from [soimy/c3rb3r-rescue](https://github.com/soimy/c3rb3r-rescue). This repo is an independent reproduction on a second victim, plus a process adaptation for bare-metal DSM.
+
+---
+
+## 中文
+
 这是继 [soimy/c3rb3r-rescue](https://github.com/soimy/c3rb3r-rescue) 之后**第二个独立受害者的成功案例**。第一个案例跑在 PVE 虚拟机里，靠整机 RAM 镜像拿到密钥。这个案例跑在**物理机（黑群晖 DS918+，DSM 7.2）**上，没有虚拟化层，靠的是**在加密进程还活着的时候 `kill -STOP` 冻结它，再从 `/proc/PID/mem` 导出内存**。
 
 结果：8.45 万个被加密文件（约 940GB），**全部用一把从内存里取出的会话密钥解开**，抽样验证与原件逐字节一致。
 
 > 如果你刚发现文件变成 `.L0CK3D`，先看下面「第一时间该做什么」。**不要重启 NAS，不要 kill 加密进程。**
 
-## 第一时间该做什么
+### 第一时间该做什么
 
 1. **找到加密进程，冻结它，不要杀掉。**
    ```sh
@@ -20,7 +113,7 @@
 3. **切断入口**：路由器 IPv6 防火墙、关 telnet/SSH 对外、杀掉反弹 shell。导出完成之前，不要重启。
 4. 核对 `ir/exe.bin` 的 sha256。如果是 `802ac85d…903d`，就可以直接用本仓库；如果不是，需要重新逆向地址（见 soimy 仓库的方法）。
 
-## 恢复步骤
+### 恢复步骤
 
 ```sh
 # 1. 取出 48 字节会话主密钥（IV16 + AES-256 key32），只用标准库，DSM 自带 python3 即可
@@ -43,7 +136,7 @@ setsid nohup python3 tools/bulk_decrypt_local.py --root /volume1/SHARE \
     --state /volume1/rescue > /volume1/rescue/run.out 2>&1 < /dev/null &
 ```
 
-## 关键结论
+### 关键结论
 
 | 项目 | 内容 |
 |---|---|
@@ -54,11 +147,11 @@ setsid nohup python3 tools/bulk_decrypt_local.py --root /volume1/SHARE \
 | 本案模式分布 | 分段 56%、前 1MiB 31%、全文件 13%（抽样 400 个） |
 | 能否跨受害者 | **不能**。每次运行一把新会话密钥；本案和第一个案例的会话标记不同。只能用自己进程内存里的那把 |
 
-## 为什么之前以为解不开
+### 为什么之前以为解不开
 
 文件尾里还有一段 304 字节的公钥包裹数据，key 的随机数来源也是 wolfSSL 的 Hash_DRBG（`/dev/urandom` 播种），看起来像是「没有攻击者私钥就无解」。实际上程序在同一个运行会话里一直把 AES 主密钥留在内存里，用来包裹每个文件的 key。**只要进程没死，主密钥就在。**这就是为什么「冻结、不杀、不重启」是整个恢复的前提。
 
-## 和第一个案例的区别
+### 和第一个案例的区别
 
 | | soimy/c3rb3r-rescue | 本案 |
 |---|---|---|
@@ -67,7 +160,7 @@ setsid nohup python3 tools/bulk_decrypt_local.py --root /volume1/SHARE \
 | 解密位置 | 独立副本上离线解密 | NAS 本地原位解密（写到原文件旁边），不搬数据 |
 | 速度 | — | i3-10100T 单进程约 110MB/s，940GB 约 2.5 小时 |
 
-## 目录
+### 目录
 
 - `tools/c3dec.py`：文件格式与解密核心（ChaCha8 + AES-CBC 解包 + 分段规则）
 - `tools/dump_process_memory.py`：导出冻结进程的样本和可写内存
@@ -81,6 +174,6 @@ setsid nohup python3 tools/bulk_decrypt_local.py --root /volume1/SHARE \
 
 本仓库**不包含**恶意样本、受害者数据或任何真实密钥。
 
-## 致谢
+### 致谢
 
 格式、地址和「会话主密钥在内存里」的关键发现来自 [soimy/c3rb3r-rescue](https://github.com/soimy/c3rb3r-rescue)。本仓库是在第二个受害者身上的独立复现，以及针对物理机 DSM 的流程补充。
